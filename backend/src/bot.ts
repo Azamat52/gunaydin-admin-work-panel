@@ -92,9 +92,15 @@ function promoLines(p: any) {
     .map((x: any) => ({ product: x.product, qty: p.type === 'combo' ? x.base : promo.triggerQty(p, x.base) }));
 }
 
-function promoListView(lang: Lang) {
+/** Mijozga ko'rinadigan aksiyalar: tug'ilgan kun aksiyasi faqat tug'ilgan kuni (± oyna) bo'lganlarga. */
+function userPromotions(birthday?: string) {
+  const isBday = promo.isBirthdayNow(birthday);
+  return store.visiblePromotions().filter((p: any) => p.type !== 'birthday' || isBday);
+}
+
+function promoListView(lang: Lang, birthday?: string) {
   const l = L(lang);
-  const list = store.visiblePromotions();
+  const list = userPromotions(birthday);
   if (!list.length) return { text: T(lang, "🎁 Hozircha faol aksiyalar yo'q.", '🎁 Сейчас нет активных акций.', '🎁 No active promotions right now.'), markup: { inline_keyboard: [[{ text: l.btn_main_menu, callback_data: 'go:main' }]] } };
   let text = l.promos_title;
   for (const p of list) text += `${p.emoji} *${p.title[lang]}* — ${p.badge}\n✅ ${promo.promoRule(p, lang)}\n${promoPeriod(p, lang)}\n\n`;
@@ -161,7 +167,7 @@ async function showProduct(chatId: number, userId: number, productId: string, ms
   let text = `${product.emoji} *${product.name[s.lang]}*\n\n` +
     `📝 ${product.description[s.lang]}\n\n` +
     `${l.product_price}: *${price(product.price, s.lang)}*`;
-  const deals = store.visiblePromotions().filter((p) => (p.items ?? []).some((i) => i.productId === productId));
+  const deals = userPromotions(s.birthday).filter((p) => (p.items ?? []).some((i) => i.productId === productId));
   for (const p of deals) text += `\n🎁 ${p.title[s.lang]} — ${promo.promoRule(p, s.lang)}`;
 
   const markup = kb.productDetail(s.lang, product, qty, isFav);
@@ -329,7 +335,7 @@ bot.onText(/\/start/, async (msg) => {
     return;
   }
   if (text === l.btn_promos) {
-    const v = promoListView(s.lang);
+    const v = promoListView(s.lang, s.birthday);
     await bot.sendMessage(chatId, v.text, { parse_mode: 'Markdown', reply_markup: v.markup });
     return;
   }
@@ -423,7 +429,7 @@ bot.on('callback_query', async (query) => {
     if (dest === 'main') { await bot.deleteMessage(chatId, msgId).catch(() => { }); await sendMain(chatId, userId); return; }
     if (dest === 'categories') { await bot.editMessageText(l.categories_title, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: kb.categories(s.lang) }); return; }
     if (dest === 'cart') { await showCart(chatId, userId, msgId); return; }
-    if (dest === 'promos') { const v = promoListView(s.lang); await bot.editMessageText(v.text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: v.markup }); return; }
+    if (dest === 'promos') { const v = promoListView(s.lang, s.birthday); await bot.editMessageText(v.text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: v.markup }); return; }
     if (dest === 'back_cat') {
       const cat = s.selectedCategory || store.categories[0]?.id || '';
       await bot.editMessageText(`${store.categoryLabel(cat)}\n\n`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: kb.productList(s.lang, cat) });
@@ -598,12 +604,12 @@ bot.on('callback_query', async (query) => {
 
   // ── Promotions ────────────────────────────────────────────────────
   if (ns === 'promo') {
-    const p = store.visiblePromotions().find(x => x.id === rest[0]);
+    const p = userPromotions(s.birthday).find(x => x.id === rest[0]);
     if (!p) { await bot.answerCallbackQuery(query.id, { text: T(s.lang, 'Aksiya tugagan', 'Акция завершена', 'Promotion ended'), show_alert: true }); return; }
     const items = promoLines(p);
     let txt = `${p.emoji} *${p.title[s.lang]}* — ${p.badge}\n\n${p.description[s.lang] || ''}\n\n✅ ${promo.promoRule(p, s.lang)}\n${promoPeriod(p, s.lang)}`;
     if (items.length) {
-      const calc = promo.calcCart(items.map((x) => ({ product: x.product, quantity: x.qty })), 'pickup', [p]);
+      const calc = promo.calcCart(items.map((x) => ({ product: x.product, quantity: x.qty })), 'pickup', [p], true);
       txt += `\n\n🛒 *${T(s.lang, 'Aksiyadagi mahsulotlar', 'Товары акции', 'Products in this deal')}:*\n`;
       for (const x of items) txt += `• ${x.product.emoji} ${x.product.name[s.lang]} × ${x.qty} — ${price(x.product.price * x.qty, s.lang)}\n`;
       if (calc.discount > 0) txt += `\n💰 ${fmt(calc.subtotal)} ➜ *${price(calc.subtotal - calc.discount, s.lang)}*`;
@@ -620,11 +626,11 @@ bot.on('callback_query', async (query) => {
 
   // Step 1: card with photo + exact contents + price, before anything goes to the cart.
   if (ns === 'promoadd') {
-    const p = store.visiblePromotions().find(x => x.id === rest[0]);
+    const p = userPromotions(s.birthday).find(x => x.id === rest[0]);
     if (!p) { await bot.answerCallbackQuery(query.id, { text: T(s.lang, 'Aksiya tugagan', 'Акция завершена', 'Promotion ended'), show_alert: true }); return; }
     const lines = promoLines(p);
     if (!lines.length) { await bot.answerCallbackQuery(query.id, { text: T(s.lang, "Aksiyadagi mahsulotlar hozir mavjud emas", 'Товары акции сейчас недоступны', 'Deal products are unavailable'), show_alert: true }); return; }
-    const calc = promo.calcCart(lines.map((x) => ({ product: x.product, quantity: x.qty })), 'pickup', [p]);
+    const calc = promo.calcCart(lines.map((x) => ({ product: x.product, quantity: x.qty })), 'pickup', [p], true);
     let txt = `${p.emoji} *${p.title[s.lang]}* — ${p.badge}\n\n✅ ${promo.promoRule(p, s.lang)}\n\n🛒 *${T(s.lang, "Savatga qo'shiladi", 'Будет добавлено', 'Will be added')}:*\n`;
     for (const x of lines) txt += `• ${x.product.emoji} ${x.product.name[s.lang]} × ${x.qty} — ${price(x.product.price * x.qty, s.lang)}\n`;
     txt += calc.discount > 0
@@ -641,7 +647,7 @@ bot.on('callback_query', async (query) => {
 
   // Step 2: confirmed — set each line to the quantity the deal needs (no double-stacking on repeat taps).
   if (ns === 'promook') {
-    const p = store.visiblePromotions().find(x => x.id === rest[0]);
+    const p = userPromotions(s.birthday).find(x => x.id === rest[0]);
     if (!p) { await bot.answerCallbackQuery(query.id, { text: T(s.lang, 'Aksiya tugagan', 'Акция завершена', 'Promotion ended'), show_alert: true }); return; }
     for (const x of promoLines(p)) {
       const inCart = s.cart.find((c) => c.product.id === x.product.id);
