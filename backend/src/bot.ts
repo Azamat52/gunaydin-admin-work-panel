@@ -8,6 +8,34 @@ import * as kb from './utils/keyboards.js';
 import * as promo from './utils/promo.js';
 import type { MiniBot } from './minibot.js';
 
+/** "25.08.1998", "25/08/1998", "1998-08-25" → "1998-08-25" (yoki null). */
+function parseBirthday(t: string): string | null {
+  t = t.trim();
+  let d: number, m: number, y: number;
+  let x = t.match(/^(\d{1,2})[.\/\- ](\d{1,2})[.\/\- ](\d{4})$/);
+  if (x) { d = +x[1]; m = +x[2]; y = +x[3]; }
+  else if ((x = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))) { y = +x[1]; m = +x[2]; d = +x[3]; }
+  else return null;
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  if (y < 1900 || dt > new Date()) return null;
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/** Tug'ilgan kun yaqin bo'lsa va aksiya bo'lsa — tavsiya yuboradi. */
+async function sendBirthdayOffer(bot: MiniBot, chatId: number, birthday?: string, notifyIfNone = false) {
+  const list = promo.birthdayPromos();
+  if (!list.length) return;
+  if (promo.isBirthdayNow(birthday)) {
+    let text = "🎉 *Tug'ilgan kuningiz muborak!*\nSiz uchun maxsus aksiyalar:\n\n";
+    for (const p of list) text += `${p.emoji} *${p.title.uz}* — ${promo.promoRule(p, 'uz')}\n`;
+    text += `\nChegirma savatchada avtomatik qo'llanadi (tug'ilgan kuningizdan ${promo.BIRTHDAY_WINDOW_DAYS} kun oldin va keyin).`;
+    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+  } else if (notifyIfNone) {
+    await bot.sendMessage(chatId, `🎂 Tug'ilgan kuningizda sizni ${list.map((p) => `${p.emoji} ${p.title.uz}`).join(', ')} aksiyasi kutmoqda!`);
+  }
+}
+
 export function registerHandlers(bot: MiniBot) {
 // ═══════════════════════════════════════════════════════════════════
 //  YORDAM SOZLAMALARI — filial egasi ma'lumotlarini shu yerga yozing
@@ -90,7 +118,7 @@ async function showCart(chatId: number, userId: number, msgId?: number) {
     else await bot.sendMessage(chatId, l.cart_empty, opts);
     return;
   }
-  const calc = promo.calcCart(s.cart, 'delivery');
+  const calc = promo.calcCart(s.cart, 'delivery', undefined, promo.isBirthdayNow(s.birthday));
 
   let text = l.cart_title;
   for (const item of s.cart) {
@@ -160,6 +188,14 @@ bot.onText(/\/start/, async (msg) => {
     parse_mode: 'Markdown',
     reply_markup: kb.mainMenu('uz'),
   });
+  // Tug'ilgan kun hali kiritilmagan bo'lsa — so'raymiz
+  if (!s.birthday) {
+    s.askingBirthday = true;
+    store.saveState();
+    await bot.sendMessage(msg.chat.id, "🎂 Tug'ilgan kuningizni kiriting (masalan: *25.08.1998*).\nTug'ilgan kuningizda maxsus aksiyalardan foydalanasiz!", { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'bday:skip' }]] } });
+  } else {
+    await sendBirthdayOffer(bot, msg.chat.id, s.birthday);
+  }
   if (s.checkoutStep) {
     await bot.sendMessage(msg.chat.id, "⚠️ Sizda tugallanmagan buyurtma bor. Davom etishingiz yoki bekor qilishingiz mumkin.", { reply_markup: kb.cancelOnly() });
   }
@@ -201,16 +237,40 @@ bot.onText(/\/start/, async (msg) => {
      return;
    }
 
+   // ── Tug'ilgan kunni qabul qilish ──
+   if (s.askingBirthday && msg.text && !msg.text.startsWith('/') && !s.checkoutStep) {
+     const bday = parseBirthday(msg.text);
+     if (!bday) {
+       await bot.sendMessage(chatId, "❗️ Sana noto'g'ri. *KK.OO.YYYY* ko'rinishida yozing, masalan: *25.08.1998*", { parse_mode: 'Markdown' });
+       return;
+     }
+     s.birthday = bday;
+     s.askingBirthday = false;
+     store.saveState();
+     const [y, mo, d] = bday.split('-');
+     await bot.sendMessage(chatId, `✅ Tug'ilgan kuningiz saqlandi: *${d}.${mo}.${y}*`, { parse_mode: 'Markdown' });
+     await sendBirthdayOffer(bot, chatId, bday, true);
+     return;
+   }
+
    // ── Address: Telegram location pin, map link or plain text ──
    if (s.checkoutStep === 'address' && (msg.location || msg.venue || msg.text)) {
      if (msg.text?.startsWith('/')) return;
-     const loc = msg.location || msg.venue?.location;
+     // Joy tanlangan bo'lsa (venue) o'sha joy, aks holda mijoz turgan aniq GPS nuqta
+     const loc = msg.venue?.location || msg.location;
      const raw = (msg.text || '').trim();
      const geo = loc ? await resolveTelegramLocation(loc.latitude, loc.longitude) : await resolveLocationText(raw);
+     if (geo && msg.venue?.title) geo.name = `${msg.venue.title}, ${msg.venue.address || geo.name}`;
      s.pendingOrder!.location = geo || undefined;
      s.pendingOrder!.address = geo ? (raw && !/https?:\/\//.test(raw) ? `${raw} (${geo.name})` : geo.name) : raw;
      s.checkoutStep = 'phone';
-     if (geo) await bot.sendMessage(chatId, `📍 ${geo.name}`);
+     if (geo) {
+       // Mijozga aniq nuqtani xaritada qaytarib ko'rsatamiz
+       try { await bot.sendLocation(chatId, geo.lat, geo.lng); } catch { /* ignore */ }
+       await bot.sendMessage(chatId, geo.source === 'text' ? `📍 Eng yaqin topilgan joy: ${geo.name}` : `📍 ${geo.name}`, { reply_markup: { remove_keyboard: true } });
+     } else {
+       await bot.sendMessage(chatId, "⚠️ Manzil xaritadan topilmadi, yozganingiz saqlandi. Aniqroq bo'lishi uchun 📍 tugma orqali lokatsiya yuboring.", { reply_markup: { remove_keyboard: true } });
+     }
      await bot.sendMessage(chatId, l.enter_phone, { parse_mode: 'Markdown', reply_markup: kb.shareContact(s.lang) });
      return;
    }
@@ -347,6 +407,14 @@ bot.on('callback_query', async (query) => {
 
   async function handleCallback() {
   const [ns, ...rest] = data.split(':');
+
+  // ── Tug'ilgan kunni o'tkazib yuborish ──
+  if (ns === 'bday' && rest[0] === 'skip') {
+    s.askingBirthday = false;
+    store.saveState();
+    await bot.deleteMessage(chatId, msgId).catch(() => { });
+    return;
+  }
 
 
   // ── Navigation ────────────────────────────────────────────────────
