@@ -37,7 +37,7 @@ export interface CartCalc {
 function lineDiscountFor(p: Promotion, item: CartItem): number {
   const price = item.product.price, qty = item.quantity, v = num(p.value);
   switch (p.type || 'percent') {
-    case 'percent': return (price - round(price * (1 - Math.min(v, 100) / 100))) * qty;
+    case 'percent': case 'birthday': return (price - round(price * (1 - Math.min(v, 100) / 100))) * qty;
     case 'happy': return inHours(p) ? (price - round(price * (1 - Math.min(v, 100) / 100))) * qty : 0;
     case 'fixed': return Math.min(price, v) * qty;
     case 'bogo': {
@@ -48,9 +48,26 @@ function lineDiscountFor(p: Promotion, item: CartItem): number {
     default: return 0;
   }
 }
-const ITEM_TYPES = ['percent', 'happy', 'fixed', 'bogo', 'second'];
+const ITEM_TYPES = ['percent', 'happy', 'fixed', 'bogo', 'second', 'birthday'];
 
-export function calcCart(cart: CartItem[], deliveryType: 'delivery' | 'pickup' = 'delivery', promos = store.visiblePromotions()): CartCalc {
+/** Tug'ilgan kun aksiyasi amal qiladigan kunlar: tug'ilgan kundan oldin/keyin shuncha kun. */
+export const BIRTHDAY_WINDOW_DAYS = 3;
+/** Mijozning tug'ilgan kuni bugun (± BIRTHDAY_WINDOW_DAYS) bo'lsa true. */
+export function isBirthdayNow(birthday?: string): boolean {
+  const m = birthday?.match(/^\d{4}-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tashkent' }));
+  today.setHours(0, 0, 0, 0);
+  for (const y of [today.getFullYear() - 1, today.getFullYear(), today.getFullYear() + 1]) {
+    const b = new Date(y, +m[1] - 1, +m[2]);
+    if (Math.abs(b.getTime() - today.getTime()) <= BIRTHDAY_WINDOW_DAYS * 86400000) return true;
+  }
+  return false;
+}
+/** Hozir faol tug'ilgan kun aksiyalari. */
+export const birthdayPromos = () => store.visiblePromotions().filter((p) => p.type === 'birthday');
+
+export function calcCart(cart: CartItem[], deliveryType: 'delivery' | 'pickup' = 'delivery', promos = store.visiblePromotions(), isBirthday = false): CartCalc {
   const subtotal = cart.reduce((s, i) => s + i.product.price * i.quantity, 0);
   const lineDiscount: Record<string, number> = {};
   const lineBy: Record<string, Promotion> = {};
@@ -66,6 +83,7 @@ export function calcCart(cart: CartItem[], deliveryType: 'delivery' | 'pickup' =
   for (const item of cart) {
     let best = 0, bestP: Promotion | undefined;
     for (const p of promos) {
+      if (p.type === 'birthday' && !isBirthday) continue;
       if (!ITEM_TYPES.includes(p.type || 'percent') || !applies(p, item.product.id) || !okMin(p, subtotal)) continue;
       const d = Math.min(lineDiscountFor(p, item), item.product.price * item.quantity);
       if (d > best) { best = d; bestP = p; }
