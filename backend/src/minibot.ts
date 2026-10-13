@@ -32,6 +32,9 @@ export class MiniBot {
   sendMessage(chat_id: number, text: string, opts: Record<string, unknown> = {}) {
     return this.api('sendMessage', { chat_id, text, ...opts });
   }
+  sendLocation(chat_id: number, latitude: number, longitude: number, opts: Record<string, unknown> = {}) {
+    return this.api('sendLocation', { chat_id, latitude, longitude, ...opts });
+  }
   /** Sends a photo from an https URL or a data: URI (uploaded as a file). */
   async sendPhoto(chat_id: number, image: string, opts: Record<string, unknown> = {}) {
     if (!image.startsWith('data:')) return this.api('sendPhoto', { chat_id, photo: image, ...opts });
