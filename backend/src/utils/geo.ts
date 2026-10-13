@@ -43,12 +43,31 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string> 
   } catch { return `${lat.toFixed(5)}, ${lng.toFixed(5)}`; }
 }
 
-async function forwardGeocode(q: string): Promise<{ lat: number; lng: number } | null> {
+async function searchOnce(q: string): Promise<{ lat: number; lng: number } | null> {
   try {
     const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=uz&q=${encodeURIComponent(q)}`, { headers: UA });
     const j: any[] = await r.json();
-    if (j[0]) return { lat: +j[0].lat, lng: +j[0].lon };
+    if (j[0] && valid(+j[0].lat, +j[0].lon)) return { lat: +j[0].lat, lng: +j[0].lon };
   } catch { /* ignore */ }
+  return null;
+}
+
+/** Yozilgan manzil uchun eng yaqin joyni topadi: to'liq matn, keyin "Toshkent" bilan,
+ *  keyin oxirgi so'zlardan boshlab qisqartirib (ko'cha/mahalla/tuman darajasigacha). */
+async function forwardGeocode(q: string): Promise<{ lat: number; lng: number } | null> {
+  const clean = q.replace(/\b(uy|kv|xonadon|dom|подъезд|кв|этаж|qavat|podyezd)\.?\s*\d+\w*/gi, ' ').replace(/\s+/g, ' ').trim();
+  const hasCity = /toshkent|tashkent|ташкент/i.test(clean);
+  const tries = [clean, hasCity ? '' : `${clean}, Toshkent`];
+  const words = clean.split(/[ ,]+/).filter(Boolean);
+  for (let n = words.length - 1; n >= 1; n--) tries.push(words.slice(0, n).join(' ') + (hasCity ? '' : ', Toshkent'));
+  const seen = new Set<string>();
+  for (const t of tries) {
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    const r = await searchOnce(t);
+    if (r) return r;
+    if (seen.size >= 6) break; // Nominatim limitidan oshmaslik uchun
+  }
   return null;
 }
 
