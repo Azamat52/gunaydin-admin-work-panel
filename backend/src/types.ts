@@ -107,4 +107,8 @@ export interface Session {
   selectedCategory?: string;
   selectedProductId?: string;
   productQty: number;
+  /** Tug'ilgan kun, YYYY-MM-DD */
+  birthday?: string;
+  /** Bot hozir tug'ilgan kunni kutyapti */
+  askingBirthday?: boolean;
 }
