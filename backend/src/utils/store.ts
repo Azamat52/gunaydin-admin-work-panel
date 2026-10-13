@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
 import { pool, migrate } from '../db.js';
-import { calcCart } from './promo.js';
+import { calcCart, isBirthdayNow } from './promo.js';
 import { Session, Lang, Order, OrderStatus, Product, Promotion } from '../types.js';
 
 let sessions = new Map<number, Session>();
@@ -223,7 +223,7 @@ export function toggleFavorite(userId: number, productId: string): boolean {
 // ── Orders ───────────────────────────────────────────────────────────────────
 export function createOrder(userId: number, partial: Partial<Order>): Order {
   const s = getSession(userId);
-  const calc = calcCart(s.cart, partial.deliveryType || 'delivery');
+  const calc = calcCart(s.cart, partial.deliveryType || 'delivery', undefined, isBirthdayNow((s as any).birthday));
   const order: Order = {
     id: String(++orderSeq), userId, userName: s.firstName, items: [...s.cart, ...calc.gifts], subtotal: calc.subtotal,
     deliveryFee: calc.deliveryFee, discount: calc.discount,
